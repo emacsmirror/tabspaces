@@ -1,0 +1,12 @@
+# Byte-compiled Elisp
+*.elc
+
+# macOS
+.DS_Store
+
+# Tabspaces session files
+.*-tabspaces-session.el
+
+# Local project files
+project-todo.org
+Claude.md
