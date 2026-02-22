@@ -56,6 +56,7 @@
 
 (declare-function magit-init "magit-status")
 (declare-function magit-status-setup-buffer "magit-status")
+(declare-function ibuffer-current-buffer "ibuffer" (&optional must-be-live))
 
 ;;;; Variables
 
@@ -557,6 +558,13 @@ tab."
      ;; 4. Default -- create buffer in current tabspace.
      (t
       (switch-to-buffer buffer norecord force-same-window)))))
+
+;;;###autoload
+(defun tabspaces-ibuffer-switch-buffer-and-tab ()
+  "In ibuffer, switch to the tab containing the buffer at point."
+  (interactive)
+  (let ((buf (ibuffer-current-buffer t)))
+    (tabspaces-switch-buffer-and-tab (buffer-name buf))))
 
 (defun tabspaces-clear-buffers (&optional frame)
   "Clear the tabspace's buffer list, except for the current buffer.

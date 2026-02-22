@@ -465,6 +465,13 @@ To integrate with ibuffer, use hooks to create workspace-based filter groups:
 
 This automatically organizes ibuffer by workspace whenever you open it. You can customize the grouping logic by modifying the filter predicate.
 
+To jump from an ibuffer entry to the tab containing that buffer, use =tabspaces-ibuffer-switch-buffer-and-tab=. Bind it in ibuffer's keymap:
+
+#+begin_src emacs-lisp
+(with-eval-after-load 'ibuffer
+  (define-key ibuffer-mode-map (kbd "o") #'tabspaces-ibuffer-switch-buffer-and-tab))
+#+end_src
+
 **** Included Buffers
 
 By default the =*scratch*= buffer is included in all workspaces. You can modify
