@@ -1245,39 +1245,49 @@ If PROJECT-OR-SESSION-FILE is:
           (load-file session-file)
           (let ((tabspaces--restore-unknown-kinds nil)
                 (skipped-remote 0))
-            ;; Use placeholder buffer to avoid pollution
-            (cl-loop for elm in tabspaces--session-list do
-                     (switch-to-buffer "*tabspaces--placeholder*")
-                     (tabspaces-switch-or-create-workspace (cadr elm))
-                     (let ((subst nil))
-                       (save-window-excursion
-                         (dolist (rec (car elm))
-                           (let ((remote
-                                  (cond ((stringp rec) (file-remote-p rec))
-                                        ((consp rec)
-                                         (file-remote-p (plist-get rec :dir))))))
-                             (cond
-                              (remote (cl-incf skipped-remote))
-                              (t (let ((buf (tabspaces--restore-buffer-record rec))
-                                       (sname (and (consp rec)
-                                                   (plist-get rec :name))))
-                                   (when buf
-                                     (switch-to-buffer buf)
-                                     (when (and sname
-                                                (not (equal sname
-                                                            (buffer-name buf))))
-                                       (push (cons sname (buffer-name buf))
-                                             subst)))))))))
-                       (when (caddr elm) ; If window state exists
-                         (window-state-put
-                          (tabspaces--rewrite-window-state (caddr elm) subst)
-                          nil 'safe))))
-            ;; Clean up placeholder buffer
-            (cl-loop for elm in tabspaces--session-list do
-                     (tabspaces-switch-or-create-workspace (cadr elm))
-                     (tabspaces-remove-selected-buffer "*tabspaces--placeholder*"))
-            (when (get-buffer "*tabspaces--placeholder*")
-              (kill-buffer "*tabspaces--placeholder*"))
+            ;; Use placeholder buffer to avoid pollution.  Cleanup runs in
+            ;; the `unwind-protect' below so the placeholder is never left
+            ;; stranded, even if a tab fails to restore mid-loop.
+            (unwind-protect
+                (cl-loop for elm in tabspaces--session-list do
+                         (switch-to-buffer "*tabspaces--placeholder*")
+                         (tabspaces-switch-or-create-workspace (cadr elm))
+                         (let ((subst nil))
+                           (save-window-excursion
+                             (dolist (rec (car elm))
+                               (let ((remote
+                                      (cond ((stringp rec) (file-remote-p rec))
+                                            ((consp rec)
+                                             (file-remote-p (plist-get rec :dir))))))
+                                 (cond
+                                  (remote (cl-incf skipped-remote))
+                                  (t (let ((buf (tabspaces--restore-buffer-record rec))
+                                           (sname (and (consp rec)
+                                                       (plist-get rec :name))))
+                                       (when buf
+                                         (switch-to-buffer buf)
+                                         (when (and sname
+                                                    (not (equal sname
+                                                                (buffer-name buf))))
+                                           (push (cons sname (buffer-name buf))
+                                                 subst)))))))))
+                           (when (caddr elm) ; If window state exists
+                             ;; A saved layout can need more space than the
+                             ;; current frame offers (e.g. the tiny initial
+                             ;; frame during daemon startup), in which case
+                             ;; `window-state-put' signals "Window too small to
+                             ;; accommodate state".  Demote it so the tab keeps
+                             ;; its buffers and the rest of the session restores.
+                             (with-demoted-errors "tabspaces: window layout not restored: %S"
+                               (window-state-put
+                                (tabspaces--rewrite-window-state (caddr elm) subst)
+                                nil 'safe)))))
+              ;; Clean up placeholder buffer
+              (cl-loop for elm in tabspaces--session-list do
+                       (tabspaces-switch-or-create-workspace (cadr elm))
+                       (tabspaces-remove-selected-buffer "*tabspaces--placeholder*"))
+              (when (get-buffer "*tabspaces--placeholder*")
+                (kill-buffer "*tabspaces--placeholder*")))
             ;; Summary messages.  These are informational.  The final
             ;; confirmation message below is what lands in the minibuffer.
             (when (> skipped-remote 0)
@@ -1298,13 +1308,45 @@ If PROJECT-OR-SESSION-FILE is:
     (message "Created tabspaces session file: %s" tabspaces-session-file)))
 
 ;; Restore session used for startup
+(defun tabspaces--restore-session-safe ()
+  "Run `tabspaces-restore-session' without ever aborting Emacs startup.
+An unhandled error here propagates through `after-init-hook'; under
+`emacs --daemon' that makes the daemon refuse to start (\"server did not
+start correctly\").  Degrade to whatever restored, plus a logged error."
+  (message "Restoring tabspaces session on startup.")
+  (condition-case err
+      (tabspaces-restore-session)
+    (error
+     (message "tabspaces: session restore failed, starting clean: %S" err))))
+
+(defun tabspaces--deferred-startup-restore ()
+  "Run the deferred startup restore in the first client frame, then unhook.
+Used under `emacs --daemon', where the only frame at startup is the tiny
+initial frame.  Restoring window layouts needs a real, correctly sized
+frame, so we wait for the first `emacsclient' frame before restoring."
+  (remove-hook 'server-after-make-frame-hook #'tabspaces--deferred-startup-restore)
+  (tabspaces--restore-session-safe))
+
 (defun tabspaces--restore-session-on-startup ()
   "Restore tabspaces session on startup.
-Unlike the interactive restore, this function does more clean up to remove
-unnecessary tab."
-  (message "Restoring tabspaces session on startup.")
+
+Under `emacs --daemon' the only frame at startup is the tiny initial frame,
+which is too small to hold saved window layouts -- `window-state-put' would
+signal \"Window too small to accommodate state\".  In that case defer the
+restore to the first client frame (via `server-after-make-frame-hook'), so
+tabs and their layouts land, at the correct size, on the frame the user
+actually sees.
+
+Note that this makes restore asynchronous under the daemon: the session is
+not restored when `tabspaces-mode' is enabled, but later when the first
+client frame connects.  Init code that runs after enabling the mode and
+expects the restored tabs to already exist should account for this."
   (tabspaces--create-session-file)
-  (tabspaces-restore-session))
+  (if (and (daemonp) (not (frame-parameter nil 'client)))
+      (progn
+        (message "tabspaces: deferring session restore until first client frame.")
+        (add-hook 'server-after-make-frame-hook #'tabspaces--deferred-startup-restore))
+    (tabspaces--restore-session-safe)))
 
 ;;;; Built-in buffer-kind handlers
 
